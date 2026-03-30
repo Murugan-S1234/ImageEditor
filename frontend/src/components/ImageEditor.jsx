@@ -10,7 +10,7 @@ import {
   ZoomIn, ZoomOut, Maximize2 
 } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'https://imageeditor-paud.onrender.com/api';
 
 const ImageEditor = () => {
   const [sessionId] = useState(() => uuidv4());
