@@ -9,6 +9,7 @@ import {
   Upload, Download, Undo2, Redo2, RotateCcw, 
   ZoomIn, ZoomOut, Maximize2 
 } from 'lucide-react';
+import { applyOperationLocally, getImageDimensions } from '../utils/imageProcessor';
 
 const API_URL = 'https://imageeditor-paud.onrender.com/api';
 
@@ -18,10 +19,13 @@ const ImageEditor = () => {
   const [originalImage, setOriginalImage] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [loading, setLoading] = useState(false);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const [zoom, setZoom] = useState(1);
   const [activeTab, setActiveTab] = useState('adjust');
+  const canUndo = historyIndex > 0;
+  const canRedo = historyIndex < history.length - 1;
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -62,24 +66,34 @@ const ImageEditor = () => {
 
     setLoading(true);
     const reader = new FileReader();
-    
-    reader.onload = async (event) => {
-      try {
-        const response = await axios.post(`${API_URL}/upload`, {
-          sessionId,
-          image: event.target.result
-        });
 
-        if (response.data.success) {
-          setImage(response.data.image);
-          setOriginalImage(response.data.image);
-          setDimensions(response.data.dimensions);
-          setCanUndo(response.data.canUndo);
-          setCanRedo(response.data.canRedo);
-          toast.success('Image uploaded successfully!');
-        }
+    reader.onload = async (event) => {
+      const dataUrl = event.target.result;
+      try {
+        const dims = await getImageDimensions(dataUrl);
+        setImage(dataUrl);
+        setOriginalImage(dataUrl);
+        setDimensions(dims);
+        setHistory([dataUrl]);
+        setHistoryIndex(0);
+        toast.success('Image loaded locally. Syncing upload in background.');
+
+        setSyncing(true);
+        axios.post(`${API_URL}/upload`, {
+          sessionId,
+          image: dataUrl
+        })
+          .then((response) => {
+            if (response.data.success) {
+              setDimensions(response.data.dimensions);
+            }
+          })
+          .catch((error) => {
+            toast.error(error.response?.data?.error || 'Failed to sync upload');
+          })
+          .finally(() => setSyncing(false));
       } catch (error) {
-        toast.error(error.response?.data?.error || 'Failed to upload image');
+        toast.error('Unable to load image');
       } finally {
         setLoading(false);
       }
@@ -96,111 +110,133 @@ const ImageEditor = () => {
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/process`, {
+      const newImage = await applyOperationLocally(image, operation, params);
+      setImage(newImage);
+      setHistory((prev) => {
+        const nextHistory = prev.slice(0, historyIndex + 1);
+        nextHistory.push(newImage);
+        return nextHistory;
+      });
+      setHistoryIndex((prev) => prev + 1);
+
+      const dims = await getImageDimensions(newImage);
+      setDimensions(dims);
+
+      setSyncing(true);
+      axios.post(`${API_URL}/process`, {
         sessionId,
         operation,
         params
-      });
-
-      if (response.data.success) {
-        setImage(response.data.image);
-        setDimensions(response.data.dimensions);
-        setCanUndo(response.data.canUndo);
-        setCanRedo(response.data.canRedo);
-      }
+      })
+        .then((response) => {
+          if (response.data.success) {
+            setDimensions(response.data.dimensions);
+          }
+        })
+        .catch((error) => {
+          toast.error(error.response?.data?.error || 'Operation sync failed');
+        })
+        .finally(() => setSyncing(false));
     } catch (error) {
-      toast.error(error.response?.data?.error || 'Operation failed');
+      toast.error('Operation failed locally');
     } finally {
       setLoading(false);
     }
-  }, [image, sessionId]);
+  }, [image, historyIndex, sessionId]);
 
   const handleUndo = useCallback(async () => {
     if (!canUndo) return;
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/undo`, { sessionId });
-      
-      if (response.data.success) {
-        setImage(response.data.image);
-        setDimensions(response.data.dimensions);
-        setCanUndo(response.data.canUndo);
-        setCanRedo(response.data.canRedo);
-        toast.success('Undo successful');
-      }
+      const newIndex = historyIndex - 1;
+      const nextImage = history[newIndex];
+      setImage(nextImage);
+      setHistoryIndex(newIndex);
+      const dims = await getImageDimensions(nextImage);
+      setDimensions(dims);
+      toast.success('Undo successful');
+
+      setSyncing(true);
+      axios.post(`${API_URL}/undo`, { sessionId })
+        .catch(() => {
+          toast.error('Undo sync failed');
+        })
+        .finally(() => setSyncing(false));
     } catch (error) {
       toast.error('Nothing to undo');
     } finally {
       setLoading(false);
     }
-  }, [canUndo, sessionId]);
+  }, [canUndo, history, historyIndex, sessionId]);
 
   const handleRedo = useCallback(async () => {
     if (!canRedo) return;
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/redo`, { sessionId });
-      
-      if (response.data.success) {
-        setImage(response.data.image);
-        setDimensions(response.data.dimensions);
-        setCanUndo(response.data.canUndo);
-        setCanRedo(response.data.canRedo);
-        toast.success('Redo successful');
-      }
+      const newIndex = historyIndex + 1;
+      const nextImage = history[newIndex];
+      setImage(nextImage);
+      setHistoryIndex(newIndex);
+      const dims = await getImageDimensions(nextImage);
+      setDimensions(dims);
+      toast.success('Redo successful');
+
+      setSyncing(true);
+      axios.post(`${API_URL}/redo`, { sessionId })
+        .catch(() => {
+          toast.error('Redo sync failed');
+        })
+        .finally(() => setSyncing(false));
     } catch (error) {
       toast.error('Nothing to redo');
     } finally {
       setLoading(false);
     }
-  }, [canRedo, sessionId]);
+  }, [canRedo, history, historyIndex, sessionId]);
 
   const handleReset = useCallback(async () => {
-    if (!image) return;
+    if (!image || !originalImage) return;
 
     setLoading(true);
     try {
-      const response = await axios.post(`${API_URL}/reset`, { sessionId });
-      
-      if (response.data.success) {
-        setImage(response.data.image);
-        setDimensions(response.data.dimensions);
-        setCanUndo(response.data.canUndo);
-        setCanRedo(response.data.canRedo);
-        toast.success('Reset to original');
-      }
+      setImage(originalImage);
+      setHistory([originalImage]);
+      setHistoryIndex(0);
+      const dims = await getImageDimensions(originalImage);
+      setDimensions(dims);
+      toast.success('Reset to original');
+
+      setSyncing(true);
+      axios.post(`${API_URL}/reset`, { sessionId })
+        .catch(() => {
+          toast.error('Reset sync failed');
+        })
+        .finally(() => setSyncing(false));
     } catch (error) {
       toast.error('Failed to reset');
     } finally {
       setLoading(false);
     }
-  }, [image, sessionId]);
+  }, [image, originalImage, sessionId]);
 
-  const handleDownload = useCallback(async () => {
+  const handleDownload = useCallback(() => {
     if (!image) {
       toast.error('No image to download');
       return;
     }
 
     try {
-      const response = await axios.post(`${API_URL}/download`, {
-        sessionId,
-        format: 'png'
-      });
-
-      if (response.data.success) {
-        const link = document.createElement('a');
-        link.href = response.data.image;
-        link.download = response.data.filename;
-        link.click();
-        toast.success('Image downloaded!');
-      }
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = 'edited-image.png';
+      link.click();
+      toast.success('Image downloaded!');
     } catch (error) {
       toast.error('Failed to download');
     }
-  }, [image, sessionId]);
+  }, [image]);
 
   const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.25, 3));
   const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.25, 0.25));
@@ -267,6 +303,12 @@ const ImageEditor = () => {
           </button>
         </div>
       </header>
+
+      {syncing && (
+        <div className="sync-info">
+          Syncing changes in background...
+        </div>
+      )}
 
       <div className="editor-main">
         {/* Sidebar */}
