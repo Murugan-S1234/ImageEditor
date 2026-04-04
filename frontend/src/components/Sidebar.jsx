@@ -23,7 +23,8 @@ const Sidebar = ({ activeTab, setActiveTab, applyOperation, disabled }) => {
   };
 
   const applySlider = (operation, paramName, value) => {
-    applyOperation(operation, { [paramName]: parseFloat(value) });
+    const parsedValue = parseFloat(value);
+    applyOperation(operation, { [paramName]: parsedValue });
   };
 
   const tabs = [

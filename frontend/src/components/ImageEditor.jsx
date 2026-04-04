@@ -9,19 +9,46 @@ import {
   Upload, Download, Undo2, Redo2, RotateCcw, 
   ZoomIn, ZoomOut, Maximize2 
 } from 'lucide-react';
-import { applyOperationLocally, getImageDimensions } from '../utils/imageProcessor';
+import { applyOperationLocally, applyAdjustmentsLocally, getImageDimensions } from '../utils/imageProcessor';
 
 const API_URL = 'https://imageeditor-paud.onrender.com/api';
+
+const DEFAULT_ADJUSTMENTS = {
+  brightness: 0,
+  contrast: 1,
+  saturation: 1,
+  exposure: 0,
+  highlights: 0,
+  shadows: 0,
+  blur: 0,
+  sharpness: 0,
+  vignette: 0,
+};
+
+const ADJUSTMENT_KEY_MAP = {
+  brightness: 'brightness',
+  contrast: 'contrast',
+  saturation: 'saturation',
+  exposure: 'exposure',
+  blur: 'blur',
+  sharpen: 'sharpness',
+  vignette: 'vignette',
+  highlights: 'highlights',
+  shadows: 'shadows'
+};
 
 const ImageEditor = () => {
   const [sessionId] = useState(() => uuidv4());
   const [image, setImage] = useState(null);
+  const [baseImage, setBaseImage] = useState(null);
   const [originalImage, setOriginalImage] = useState(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [adjustments, setAdjustments] = useState(DEFAULT_ADJUSTMENTS);
+  const [sidebarKey, setSidebarKey] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [activeTab, setActiveTab] = useState('adjust');
   const canUndo = historyIndex > 0;
@@ -72,7 +99,10 @@ const ImageEditor = () => {
       try {
         const dims = await getImageDimensions(dataUrl);
         setImage(dataUrl);
+        setBaseImage(dataUrl);
         setOriginalImage(dataUrl);
+        setAdjustments(DEFAULT_ADJUSTMENTS);
+        setSidebarKey((prev) => prev + 1);
         setDimensions(dims);
         setHistory([dataUrl]);
         setHistoryIndex(0);
@@ -102,6 +132,24 @@ const ImageEditor = () => {
     reader.readAsDataURL(file);
   }, [sessionId]);
 
+  const syncCurrentImage = useCallback((currentImage) => {
+    setSyncing(true);
+    axios.post(`${API_URL}/sync`, {
+      sessionId,
+      image: currentImage
+    })
+      .catch((error) => {
+        toast.error(error.response?.data?.error || 'Sync failed');
+      })
+      .finally(() => setSyncing(false));
+  }, [sessionId]);
+
+  const hasActiveAdjustments = Object.entries(adjustments).some(([key, value]) => {
+    return key === 'contrast' || key === 'saturation'
+      ? value !== 1
+      : value !== 0;
+  });
+
   const applyOperation = useCallback(async (operation, params = {}) => {
     if (!image) {
       toast.error('Please upload an image first');
@@ -110,7 +158,30 @@ const ImageEditor = () => {
 
     setLoading(true);
     try {
-      const newImage = await applyOperationLocally(image, operation, params);
+      const adjustmentKey = ADJUSTMENT_KEY_MAP[operation];
+      let newBaseImage = baseImage || image;
+      let newImage;
+
+      if (adjustmentKey) {
+        const nextAdjustments = {
+          ...adjustments,
+          [adjustmentKey]: params.value ?? params.factor ?? params.amount ?? params.strength ?? adjustments[adjustmentKey]
+        };
+
+        newImage = await applyAdjustmentsLocally(newBaseImage, nextAdjustments);
+        setAdjustments(nextAdjustments);
+      } else {
+        if (hasActiveAdjustments) {
+          newBaseImage = await applyAdjustmentsLocally(newBaseImage, adjustments);
+          setBaseImage(newBaseImage);
+          setAdjustments(DEFAULT_ADJUSTMENTS);
+          setSidebarKey((prev) => prev + 1);
+        }
+
+        newImage = await applyOperationLocally(newBaseImage, operation, params);
+        setBaseImage(newImage);
+      }
+
       setImage(newImage);
       setHistory((prev) => {
         const nextHistory = prev.slice(0, historyIndex + 1);
@@ -121,28 +192,13 @@ const ImageEditor = () => {
 
       const dims = await getImageDimensions(newImage);
       setDimensions(dims);
-
-      setSyncing(true);
-      axios.post(`${API_URL}/process`, {
-        sessionId,
-        operation,
-        params
-      })
-        .then((response) => {
-          if (response.data.success) {
-            setDimensions(response.data.dimensions);
-          }
-        })
-        .catch((error) => {
-          toast.error(error.response?.data?.error || 'Operation sync failed');
-        })
-        .finally(() => setSyncing(false));
+      syncCurrentImage(newImage);
     } catch (error) {
       toast.error('Operation failed locally');
     } finally {
       setLoading(false);
     }
-  }, [image, historyIndex, sessionId]);
+  }, [image, baseImage, adjustments, hasActiveAdjustments, historyIndex, sessionId, syncCurrentImage]);
 
   const handleUndo = useCallback(async () => {
     if (!canUndo) return;
@@ -152,23 +208,20 @@ const ImageEditor = () => {
       const newIndex = historyIndex - 1;
       const nextImage = history[newIndex];
       setImage(nextImage);
+      setBaseImage(nextImage);
+      setAdjustments(DEFAULT_ADJUSTMENTS);
+      setSidebarKey((prev) => prev + 1);
       setHistoryIndex(newIndex);
       const dims = await getImageDimensions(nextImage);
       setDimensions(dims);
       toast.success('Undo successful');
-
-      setSyncing(true);
-      axios.post(`${API_URL}/undo`, { sessionId })
-        .catch(() => {
-          toast.error('Undo sync failed');
-        })
-        .finally(() => setSyncing(false));
+      syncCurrentImage(nextImage);
     } catch (error) {
       toast.error('Nothing to undo');
     } finally {
       setLoading(false);
     }
-  }, [canUndo, history, historyIndex, sessionId]);
+  }, [canUndo, history, historyIndex, syncCurrentImage]);
 
   const handleRedo = useCallback(async () => {
     if (!canRedo) return;
@@ -178,23 +231,20 @@ const ImageEditor = () => {
       const newIndex = historyIndex + 1;
       const nextImage = history[newIndex];
       setImage(nextImage);
+      setBaseImage(nextImage);
+      setAdjustments(DEFAULT_ADJUSTMENTS);
+      setSidebarKey((prev) => prev + 1);
       setHistoryIndex(newIndex);
       const dims = await getImageDimensions(nextImage);
       setDimensions(dims);
       toast.success('Redo successful');
-
-      setSyncing(true);
-      axios.post(`${API_URL}/redo`, { sessionId })
-        .catch(() => {
-          toast.error('Redo sync failed');
-        })
-        .finally(() => setSyncing(false));
+      syncCurrentImage(nextImage);
     } catch (error) {
       toast.error('Nothing to redo');
     } finally {
       setLoading(false);
     }
-  }, [canRedo, history, historyIndex, sessionId]);
+  }, [canRedo, history, historyIndex, syncCurrentImage]);
 
   const handleReset = useCallback(async () => {
     if (!image || !originalImage) return;
@@ -202,24 +252,21 @@ const ImageEditor = () => {
     setLoading(true);
     try {
       setImage(originalImage);
+      setBaseImage(originalImage);
+      setAdjustments(DEFAULT_ADJUSTMENTS);
+      setSidebarKey((prev) => prev + 1);
       setHistory([originalImage]);
       setHistoryIndex(0);
       const dims = await getImageDimensions(originalImage);
       setDimensions(dims);
       toast.success('Reset to original');
-
-      setSyncing(true);
-      axios.post(`${API_URL}/reset`, { sessionId })
-        .catch(() => {
-          toast.error('Reset sync failed');
-        })
-        .finally(() => setSyncing(false));
+      syncCurrentImage(originalImage);
     } catch (error) {
       toast.error('Failed to reset');
     } finally {
       setLoading(false);
     }
-  }, [image, originalImage, sessionId]);
+  }, [image, originalImage, syncCurrentImage]);
 
   const handleDownload = useCallback(() => {
     if (!image) {
@@ -307,6 +354,7 @@ const ImageEditor = () => {
       <div className="editor-main">
         {/* Sidebar */}
         <Sidebar 
+          key={sidebarKey}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           applyOperation={applyOperation}

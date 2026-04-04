@@ -232,8 +232,12 @@ export const applyOperationLocally = async (src, operation, params = {}) => {
     case 'sharpen':
       return (async () => {
         const { canvas, ctx, imageData } = await getImageData(src);
-        const amount = clamp(params.amount || 1.5, 0, 3);
-        const kernel = [0, -1, 0, -1, 5, -1, 0, -1, 0];
+        const amount = clamp(Number(params.amount) || 0, -5, 10);
+        if (amount === 0) {
+          return src;
+        }
+        const center = 1 + 4 * amount;
+        const kernel = [0, -amount, 0, -amount, center, -amount, 0, -amount, 0];
         applyConvolution(imageData, kernel, 1, 0);
         return imageDataToDataUrl(canvas, ctx, imageData);
       })();
@@ -246,4 +250,51 @@ export const applyOperationLocally = async (src, operation, params = {}) => {
     default:
       return src;
   }
+};
+
+export const applyAdjustmentsLocally = async (src, adjustments = {}) => {
+  let result = src;
+  if (!result) {
+    return src;
+  }
+
+  const brightness = Number(adjustments.brightness || 0);
+  const exposure = Number(adjustments.exposure || 0);
+  const contrast = Number(adjustments.contrast || 1);
+  const saturation = Number(adjustments.saturation || 1);
+  const blur = Number(adjustments.blur || 0);
+  const sharpness = Number(adjustments.sharpness || 0);
+  const vignette = Number(adjustments.vignette || 0);
+  const highlights = Number(adjustments.highlights || 0);
+  const shadows = Number(adjustments.shadows || 0);
+
+  if (brightness !== 0) {
+    result = await applyOperationLocally(result, 'brightness', { value: brightness });
+  }
+  if (exposure !== 0) {
+    result = await applyOperationLocally(result, 'exposure', { value: exposure });
+  }
+  if (contrast !== 1) {
+    result = await applyOperationLocally(result, 'contrast', { factor: contrast });
+  }
+  if (saturation !== 1) {
+    result = await applyOperationLocally(result, 'saturation', { factor: saturation });
+  }
+  if (blur !== 0) {
+    result = await applyOperationLocally(result, 'blur', { sigma: blur });
+  }
+  if (sharpness !== 0) {
+    result = await applyOperationLocally(result, 'sharpen', { amount: sharpness });
+  }
+  if (vignette !== 0) {
+    result = await applyOperationLocally(result, 'vignette', { strength: vignette });
+  }
+  if (highlights !== 0) {
+    result = await applyOperationLocally(result, 'highlights', { value: highlights });
+  }
+  if (shadows !== 0) {
+    result = await applyOperationLocally(result, 'shadows', { value: shadows });
+  }
+
+  return result;
 };

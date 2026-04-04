@@ -4,7 +4,7 @@ from image_processor import ImageProcessor
 import traceback
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 # Store image history per session (in production, use Redis or database)
 image_sessions = {}
@@ -123,6 +123,39 @@ def process_image():
             'canRedo': session['history_index'] < len(session['history']) - 1
         })
         
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sync', methods=['POST', 'OPTIONS'])
+def sync_image():
+    """Sync the current image state from the frontend."""
+    try:
+        data = request.json
+        session_id = data.get('sessionId', 'default')
+        image_data = data.get('image')
+
+        if not image_data:
+            return jsonify({'error': 'No image provided'}), 400
+
+        arr = ImageProcessor.decode_image(image_data)
+
+        if session_id not in image_sessions:
+            image_sessions[session_id] = {
+                'current': arr,
+                'history': [arr.copy()],
+                'history_index': 0,
+                'max_history': 50
+            }
+        else:
+            session = image_sessions[session_id]
+            session['current'] = arr
+            session['history'] = session['history'][:session['history_index'] + 1]
+            session['history'].append(arr.copy())
+            session['history_index'] = len(session['history']) - 1
+
+        return jsonify({'success': True})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
