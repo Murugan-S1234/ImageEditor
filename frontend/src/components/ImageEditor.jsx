@@ -248,8 +248,7 @@ const ImageEditor = () => {
       <header className="editor-header">
         <div className="header-left">
           <h1 className="logo">
-            <span className="logo-icon">🎨</span>
-            Image Editor Pro
+            Image Editor
           </h1>
         </div>
         
@@ -304,11 +303,6 @@ const ImageEditor = () => {
         </div>
       </header>
 
-      {syncing && (
-        <div className="sync-info">
-          Syncing changes in background...
-        </div>
-      )}
 
       <div className="editor-main">
         {/* Sidebar */}
