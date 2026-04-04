@@ -4,7 +4,7 @@ from image_processor import ImageProcessor
 import traceback
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+CORS(app, resources={r"/api/*": {"origins": "*"}}, allow_headers=['Content-Type'])
 
 # Store image history per session (in production, use Redis or database)
 image_sessions = {}
@@ -131,6 +131,9 @@ def process_image():
 @app.route('/api/sync', methods=['POST', 'OPTIONS'])
 def sync_image():
     """Sync the current image state from the frontend."""
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+
     try:
         data = request.json
         session_id = data.get('sessionId', 'default')
